@@ -1,0 +1,32 @@
+# Secrets & Credentials
+.env*
+config/.env*
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+
+# Trading Data (zu groß für GitHub)
+data/trades/*.json
+data/positions/*.json
+data/sessions/*.json
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
