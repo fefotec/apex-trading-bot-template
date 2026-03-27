@@ -48,7 +48,7 @@
         "conditions": {
           "string": [
             {
-              "value1": "={{ $json.ref }}",
+              "value1": "={{ $json.body.ref }}",
               "operation": "contains",
               "value2": "refs/heads/main"
             }
