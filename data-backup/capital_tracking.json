@@ -1,0 +1,15 @@
+{
+  "start_capital": 1721.80,
+  "deposits": [
+    {
+      "date": "2026-03-24",
+      "amount": 578.74,
+      "reason": "Christian's Einzahlung nach erstem Trade",
+      "new_total": 2300.54
+    }
+  ],
+  "withdrawals": [],
+  "total_deposits": 578.74,
+  "total_withdrawals": 0,
+  "adjusted_start_capital": 2300.54
+}
