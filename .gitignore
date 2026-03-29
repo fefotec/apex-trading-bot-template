@@ -19,3 +19,4 @@ __pycache__/
 .env
 .env.*
 config/.env*
+# Auto-pull test 18:45
