@@ -44,6 +44,37 @@ def send_telegram_notification(message):
         print(f"⚠️  Telegram notification error: {e}")
 
 
+def cleanup_orphan_orders(coin, current_positions):
+    """
+    Raeume verwaiste SL/TP-Orders auf fuer ein geschlossenes Asset.
+    Wenn z.B. der TP getroffen hat, bleibt die SL-Order aktiv.
+    Diese muss storniert werden, sonst koennte sie bei einer neuen Position triggern.
+
+    SICHERHEIT: Prueft vorher ob fuer diesen Coin eine NEUE Position offen ist.
+    Falls ja, werden Orders NICHT storniert (koennten zum neuen Trade gehoeren).
+    """
+    # Pruefen ob eine neue Position fuer diesen Coin existiert
+    active_coins = [p.coin for p in current_positions]
+    if coin in active_coins:
+        print(f"   ⚠️  {coin} hat eine aktive Position -- Orders NICHT storniert (koennten zum neuen Trade gehoeren)")
+        return
+
+    try:
+        from place_order import cancel_all_orders_for_coin
+        result = cancel_all_orders_for_coin(coin)
+        if result["success"]:
+            cancelled = result.get("cancelled", 0)
+            if cancelled > 0:
+                print(f"   🧹 {cancelled} verwaiste Order(s) fuer {coin} storniert")
+                send_telegram_notification(f"🧹 {cancelled} verwaiste Order(s) fuer {coin} aufgeraeumt")
+            else:
+                print(f"   ✅ Keine verwaisten Orders fuer {coin}")
+        else:
+            print(f"   ⚠️  Orphan-Cleanup Fehler: {result.get('error')}")
+    except Exception as e:
+        print(f"   ⚠️  Orphan-Cleanup Exception: {e}")
+
+
 def update_pnl_tracker(pnl):
     """Update P&L tracker with realized profit"""
     if not os.path.exists(PNL_TRACKER_FILE):
@@ -98,13 +129,24 @@ def main():
         print("\n" + "=" * 60)
         print("🎯 POSITION GESCHLOSSEN!")
         print("=" * 60)
-        
+
+        # Verwaiste Orders aufraeumen (SL/TP die nicht mehr gebraucht werden)
+        # positions = aktuelle Positionen (leer, weil gerade geschlossen)
+        last_coins = state.get("last_position_coins", [])
+        for coin in last_coins:
+            cleanup_orphan_orders(coin, positions)
+
         # Get recent fills from last 24h and find the closing trade
         from hyperliquid.info import Info
         from hyperliquid.utils import constants
         
         info = Info(constants.MAINNET_API_URL, skip_ws=True)
-        wallet = os.getenv('HYPERLIQUID_WALLET', '0x537f283E5145a53a9A9e53a5570ED225D7E62a8B')
+        # Wallet aus .env laden (kein hardcoded Fallback!)
+        from place_order import load_credentials
+        _, wallet = load_credentials()
+        if not wallet:
+            print("⚠️  Keine Wallet-Adresse konfiguriert")
+            wallet = client.address  # Fallback auf Client-Wallet
         fills = info.user_fills(wallet)
         
         # Filter to last 24h and find Close trades
@@ -190,9 +232,11 @@ Size: {total_size:.5f}
     else:
         print("\n⏸️  Keine offenen Positionen")
     
-    # Save new state
+    # Save new state (inkl. Coin-Liste fuer Orphan-Cleanup)
+    position_coins = [p.coin for p in positions]
     save_state({
         "last_position_count": current_count,
+        "last_position_coins": position_coins,
         "last_check": datetime.now().isoformat()
     })
     

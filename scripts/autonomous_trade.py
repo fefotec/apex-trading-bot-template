@@ -18,15 +18,85 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts.hyperliquid_client import HyperliquidClient
 
 # Config
-CAPITAL = 2300  # Total USDC
 MAX_RISK_PCT = 0.02  # 2% risk per trade
-MAX_RISK_USD = CAPITAL * MAX_RISK_PCT  # ~$46
+KILL_SWITCH_DRAWDOWN = 0.50  # 50% drawdown = stop trading
 
-# Opening Range Boxes (werden von Opening Range Cron aktualisiert)
-BOXES_FILE = "/data/.openclaw/workspace/projects/apex-trading/data/opening_range_boxes.json"
+# Pfade (dynamisch mit Server-Fallback)
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+if os.path.exists("/data/.openclaw/workspace/projects/apex-trading/data"):
+    DATA_DIR = "/data/.openclaw/workspace/projects/apex-trading/data"
 
-# Trade Log
-TRADES_FILE = "/data/.openclaw/workspace/projects/apex-trading/data/trades.json"
+BOXES_FILE = os.path.join(DATA_DIR, "opening_range_boxes.json")
+TRADES_FILE = os.path.join(DATA_DIR, "trades.json")
+CAPITAL_TRACKING_FILE = os.path.join(DATA_DIR, "capital_tracking.json")
+
+
+def get_adjusted_start_capital():
+    """Hole adjusted start capital aus capital_tracking.json (Startkapital + Einzahlungen)"""
+    if os.path.exists(CAPITAL_TRACKING_FILE):
+        try:
+            with open(CAPITAL_TRACKING_FILE, 'r') as f:
+                tracking = json.load(f)
+            return tracking.get("adjusted_start_capital", tracking.get("start_capital", 2300))
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return 2300  # Fallback
+
+
+def get_total_account_value(client):
+    """
+    Hole den GESAMTEN Kontowert: Spot-Balance + Margin-Account-Value.
+
+    Wichtig: Beim Perpetual-Trading wandert Kapital vom Spot-Account
+    in den Margin-Account als Collateral. get_balance() allein wuerde
+    bei offenen Positionen faelschlich ~0 zeigen.
+    """
+    spot = client.get_balance()
+
+    # Margin Account Value (Collateral + unrealized PnL)
+    margin_value = 0.0
+    try:
+        state = client.get_account_state()
+        if "error" not in state:
+            margin_summary = state.get("marginSummary", {})
+            margin_value = float(margin_summary.get("accountValue", 0))
+    except Exception:
+        pass
+
+    return spot + margin_value
+
+
+def check_kill_switch(client):
+    """
+    Kill-Switch: Pruefe ob Drawdown > 50% -- wenn ja, NICHT traden.
+
+    Nutzt Spot + Margin Balance um den echten Kontowert zu ermitteln.
+
+    Returns:
+        tuple: (is_safe, balance, start_capital)
+    """
+    balance = get_total_account_value(client)
+    start_capital = get_adjusted_start_capital()
+
+    if balance <= 0:
+        return False, 0, start_capital
+
+    drawdown = 1 - (balance / start_capital)
+
+    if drawdown >= KILL_SWITCH_DRAWDOWN:
+        msg = (
+            f"🚨 APEX KILL-SWITCH AKTIVIERT!\n\n"
+            f"Drawdown: {drawdown*100:.1f}%\n"
+            f"Balance: ${balance:,.2f}\n"
+            f"Start-Kapital: ${start_capital:,.2f}\n\n"
+            f"⛔ Alle Trades gestoppt!\n"
+            f"Manuelles Eingreifen erforderlich."
+        )
+        print(f"\n🚨 KILL-SWITCH: Drawdown {drawdown*100:.1f}% >= {KILL_SWITCH_DRAWDOWN*100:.0f}%")
+        send_telegram_message(msg)
+        return False, balance, start_capital
+
+    return True, balance, start_capital
 
 
 def load_boxes():
@@ -138,10 +208,13 @@ def calculate_position_size(risk_usd, entry_price, stop_loss_price):
     return size
 
 
-def execute_breakout_trade(asset, direction, entry_price, box_high, box_low):
+def execute_breakout_trade(asset, direction, entry_price, box_high, box_low, risk_usd):
     """
     Platziere Breakout Trade mit Stop-Loss und Take-Profit
-    
+
+    SICHERHEIT: Wenn SL-Platzierung fehlschlaegt, wird die Position
+    sofort per Market Order geschlossen (Rollback).
+
     Returns:
         dict: Trade result
     """
@@ -150,44 +223,89 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low):
         stop_loss = box_low - 10  # $10 below box
     else:
         stop_loss = box_high + 10  # $10 above box
-    
+
     # Calculate position size
-    size = calculate_position_size(MAX_RISK_USD, entry_price, stop_loss)
-    
+    size = calculate_position_size(risk_usd, entry_price, stop_loss)
+
     # Round size appropriately
     if asset in ["BTC", "ETH"]:
         size = round(size, 5)  # 5 decimals
     else:
         size = round(size, 4)
-    
+
     # Minimum size check
     if asset == "BTC" and size < 0.00001:
         return {"success": False, "error": "Size too small"}
-    
+
     # Place market order
     is_buy = (direction == "long")
     order_result = place_market_order(asset, is_buy, size, reduce_only=False)
-    
+
     if not order_result["success"]:
         return order_result
-    
+
     actual_entry = order_result["avg_price"]
-    
+
     # Calculate Take-Profit (2:1 Risk/Reward ratio)
     risk_per_coin = abs(actual_entry - stop_loss)
     reward_per_coin = risk_per_coin * 2  # Conservative 2:1
-    
+
     if direction == "long":
         take_profit = actual_entry + reward_per_coin
     else:
         take_profit = actual_entry - reward_per_coin
-    
+
     # Place stop-loss
     sl_result = place_stop_loss(asset, stop_loss, size)
-    
+
+    # KRITISCH: Wenn SL fehlschlaegt, Position sofort schliessen!
+    if not sl_result["success"]:
+        print(f"\n🚨 SL-PLATZIERUNG FEHLGESCHLAGEN! Schliesse Position sofort...")
+
+        # 3 Versuche fuer Rollback
+        rollback = {"success": False}
+        for attempt in range(1, 4):
+            print(f"   Rollback-Versuch {attempt}/3...")
+            rollback = place_market_order(asset, not is_buy, size, reduce_only=True)
+            if rollback["success"]:
+                break
+            if attempt < 3:
+                import time
+                time.sleep(2)
+
+        msg = (
+            f"🚨 APEX SL-ROLLBACK!\n\n"
+            f"Stop-Loss fuer {asset} {direction.upper()} konnte nicht platziert werden.\n"
+            f"SL-Fehler: {sl_result.get('error', 'unbekannt')}\n\n"
+            f"Position geschlossen: {'Erfolg' if rollback['success'] else '⛔ FEHLGESCHLAGEN nach 3 Versuchen!'}\n"
+            f"Entry: ${actual_entry:,.2f}"
+        )
+        if not rollback["success"]:
+            msg += "\n\n⛔ ACHTUNG: UNGESICHERTE POSITION! Sofort manuell eingreifen!"
+        send_telegram_message(msg)
+
+        log_trade({
+            "asset": asset,
+            "direction": direction,
+            "entry_price": actual_entry,
+            "size": size,
+            "stop_loss": stop_loss,
+            "risk_usd": risk_usd,
+            "order_result": order_result,
+            "sl_result": sl_result,
+            "rollback": True,
+            "rollback_result": rollback
+        })
+
+        return {
+            "success": False,
+            "error": f"SL placement failed - position rolled back ({'OK' if rollback['success'] else 'ROLLBACK FAILED - MANUAL ACTION NEEDED'})",
+            "rollback": rollback
+        }
+
     # Place take-profit
     tp_result = place_take_profit(asset, take_profit, size)
-    
+
     # Log trade
     log_trade({
         "asset": asset,
@@ -196,14 +314,14 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low):
         "size": size,
         "stop_loss": stop_loss,
         "take_profit": take_profit,
-        "risk_usd": MAX_RISK_USD,
-        "reward_usd": MAX_RISK_USD * 2,
+        "risk_usd": risk_usd,
+        "reward_usd": risk_usd * 2,
         "ratio": "2:1",
         "order_result": order_result,
         "sl_result": sl_result,
         "tp_result": tp_result
     })
-    
+
     return {
         "success": True,
         "asset": asset,
@@ -212,6 +330,7 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low):
         "size": size,
         "stop_loss": stop_loss,
         "take_profit": take_profit,
+        "risk_usd": risk_usd,
         "sl_placed": sl_result["success"],
         "tp_placed": tp_result["success"]
     }
@@ -277,16 +396,29 @@ def main():
     print("=" * 60)
     print("APEX - Autonomous Trade Check")
     print("=" * 60)
-    
+
     # Check current session
     session = get_current_session()
     if not session:
         print("⚠️  Not in a trading session window!")
         print("NO_REPLY")
         return {"success": True, "skipped": True, "reason": "Outside trading hours"}
-    
+
     print(f"📍 Current Session: {session.upper()}")
-    
+
+    # Initialize client
+    client = HyperliquidClient()
+
+    # === KILL-SWITCH ===
+    is_safe, balance, start_capital = check_kill_switch(client)
+    if not is_safe:
+        print("NO_REPLY")
+        return {"success": False, "reason": "Kill-switch activated"}
+
+    # Dynamic risk calculation based on current balance
+    risk_usd = balance * MAX_RISK_PCT
+    print(f"💰 Balance: ${balance:,.2f} | Risk: ${risk_usd:,.2f} ({MAX_RISK_PCT*100:.0f}%)")
+
     # Check if already traded today in this session
     if has_traded_today_in_session(session):
         print(f"\n✅ SKIP: Already traded today in {session.upper()} session!")
@@ -294,50 +426,50 @@ def main():
         send_telegram_message(f"⏭️ APEX {session.upper()}: Skip - bereits getradet in dieser Session")
         print("NO_REPLY")
         return {"success": True, "skipped": True, "reason": f"Already traded in {session} session today"}
-    
+
     # Check for existing positions (just for logging)
-    client = HyperliquidClient()
     positions = client.get_positions()
-    
+
     if positions:
         position_list = ", ".join([f"{p.coin} {'LONG' if p.size > 0 else 'SHORT'}" for p in positions])
         print(f"\n📊 Existing positions: {position_list}")
         print("   Will skip those assets, check others...")
-    
+
     # Scan for breakouts (automatically skips assets with positions)
     print("\n🔍 Scanning for breakouts...")
     breakout = scan_for_breakouts()
-    
+
     if not breakout:
         print("   No valid breakouts found.")
         send_telegram_message(f"🔍 APEX {session.upper()}: Kein Breakout gefunden - kein Trade")
         print("NO_REPLY")
         return {"success": False, "reason": "No breakout"}
-    
+
     print(f"\n🎯 BREAKOUT DETECTED!")
     print(f"   Asset: {breakout['asset']}")
     print(f"   Direction: {breakout['direction'].upper()}")
     print(f"   Current: ${breakout['current_price']:,.2f}")
     print(f"   Box: ${breakout['box_low']:,.2f} - ${breakout['box_high']:,.2f}")
     print(f"   Breakout Size: ${breakout['breakout_size']:,.2f}")
-    
-    # Execute trade
-    print(f"\n🚀 Executing {breakout['direction']} trade...")
-    
+
+    # Execute trade (mit dynamischem Risk)
+    print(f"\n🚀 Executing {breakout['direction']} trade (Risk: ${risk_usd:,.2f})...")
+
     result = execute_breakout_trade(
         breakout['asset'],
         breakout['direction'],
         breakout['current_price'],
         breakout['box_high'],
-        breakout['box_low']
+        breakout['box_low'],
+        risk_usd
     )
-    
+
     if result["success"]:
         print(f"\n✅ TRADE EXECUTED!")
         print(f"   Entry: ${result['entry']:,.2f}")
         print(f"   Size: {result['size']}")
-        print(f"   Stop-Loss: ${result['stop_loss']:,.2f} (Risk: ${MAX_RISK_USD:.0f})")
-        print(f"   Take-Profit: ${result['take_profit']:,.2f} (Reward: ${MAX_RISK_USD * 2:.0f})")
+        print(f"   Stop-Loss: ${result['stop_loss']:,.2f} (Risk: ${risk_usd:.0f})")
+        print(f"   Take-Profit: ${result['take_profit']:,.2f} (Reward: ${risk_usd * 2:.0f})")
         print(f"   Ratio: 2:1")
         print(f"   SL Placed: {result['sl_placed']} | TP Placed: {result['tp_placed']}")
         print(f"\n💡 Position Monitor läuft automatisch alle 30 Min")
@@ -348,8 +480,8 @@ def main():
             f"{direction_emoji} {result['asset']} {result['direction'].upper()}\n"
             f"Entry: ${result['entry']:,.2f}\n"
             f"Size: {result['size']}\n"
-            f"Stop-Loss: ${result['stop_loss']:,.2f} (Risk: ${MAX_RISK_USD:.0f})\n"
-            f"Take-Profit: ${result['take_profit']:,.2f} (Reward: ${MAX_RISK_USD * 2:.0f})\n"
+            f"Stop-Loss: ${result['stop_loss']:,.2f} (Risk: ${risk_usd:.0f})\n"
+            f"Take-Profit: ${result['take_profit']:,.2f} (Reward: ${risk_usd * 2:.0f})\n"
             f"Ratio: 2:1\n"
             f"SL: {'✅' if result['sl_placed'] else '❌'} | TP: {'✅' if result['tp_placed'] else '❌'}"
         )

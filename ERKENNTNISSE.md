@@ -57,8 +57,30 @@
 
 ## 🔧 Technische Learnings
 
+### n8n Webhook: POST-Body liegt unter $json.body
+- **Problem:** IF-Node pruefte `$json.ref` - war immer leer, Workflow brach ab
+- **Ursache:** n8n Webhook-Nodes wrappen den eingehenden POST-Body unter `$json.body`. Die Top-Level Keys sind: `headers`, `params`, `query`, `body`, `webhookUrl`, `executionMode`
+- **Loesung:** Alle Referenzen auf GitHub-Daten muessen `$json.body.*` verwenden (z.B. `$json.body.ref`, `$json.body.head_commit`)
+- **Merke:** Bei n8n Webhooks IMMER `$json.body.*` fuer POST-Daten verwenden!
+
+### n8n Cloud: executeCommand Node nicht verfuegbar
+- **Problem:** Der originale Workflow nutzte `n8n-nodes-base.executeCommand` fuer `git pull`
+- **Ursache:** n8n Cloud deaktiviert den executeCommand-Node aus Sicherheitsgruenden
+- **Loesung:** HTTP Request Node stattdessen, der einen Webhook-Server auf dem Zielserver aufruft
+- **Merke:** Fuer Server-Befehle auf n8n Cloud immer HTTP Request an einen eigenen Endpoint nutzen!
+
+### Cloudflare Tunnel: Published Application Routes fuer oeffentliche URLs
+- **Problem:** "Hostname routes" Tab erstellt nur private Routes (braucht WARP Client)
+- **Loesung:** "Published application routes" Tab im Tunnel nutzen - das erstellt oeffentlich erreichbare Subdomains
+- **Merke:** Hostname routes = privat (WARP noetig), Published application routes = oeffentlich!
+
 ### API & Infrastruktur
-*(Bugs, Workarounds, Optimierungen)*
+
+### OpenClaw Cron Jobs laufen NICHT ueber system-crontab
+- **Problem:** `crontab -l` zeigt keine Cron Jobs an, obwohl Skripte planmaessig ausgefuehrt werden sollen
+- **Ursache:** OpenClaw nutzt ein eigenes internes Scheduling-System, nicht den Linux system-crontab. Die Jobs werden ueber die OpenClaw-Platform verwaltet.
+- **Loesung:** Cron Jobs immer ueber das OpenClaw Scheduling-Interface pruefen und einrichten, nicht ueber die Shell
+- **Merke:** Bei OpenClaw niemals `crontab -l` oder `crontab -e` fuer Cron-Diagnose nutzen - das OpenClaw Scheduling ist ein separates System!
 
 ---
 
@@ -103,4 +125,4 @@
 
 ---
 
-*Letzte Aktualisierung: 2026-03-22*
+*Letzte Aktualisierung: 2026-03-27*

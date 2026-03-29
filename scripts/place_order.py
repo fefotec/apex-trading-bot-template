@@ -327,6 +327,55 @@ def place_take_profit(
         }
 
 
+def cancel_all_orders_for_coin(coin: str):
+    """
+    Storniere alle offenen Orders fuer ein Asset.
+    Wird genutzt um verwaiste SL/TP-Orders aufzuraeumen
+    wenn eine Position geschlossen wurde.
+    """
+    try:
+        private_key, wallet_address = load_credentials()
+
+        if not private_key:
+            return {"success": False, "error": "No private key configured"}
+
+        info = Info(constants.MAINNET_API_URL, skip_ws=True)
+        exchange = Exchange(
+            wallet=wallet_address,
+            base_url=constants.MAINNET_API_URL,
+            account_address=wallet_address
+        )
+
+        from eth_account import Account
+        exchange.wallet = Account.from_key(private_key)
+
+        # Hole alle offenen Orders
+        open_orders = info.open_orders(wallet_address)
+
+        # Filtere nach Coin
+        coin_orders = [o for o in open_orders if o.get("coin") == coin]
+
+        if not coin_orders:
+            return {"success": True, "cancelled": 0, "message": f"Keine offenen Orders fuer {coin}"}
+
+        # Storniere jede Order einzeln
+        cancelled = 0
+        for order in coin_orders:
+            oid = order.get("oid")
+            if oid:
+                try:
+                    result = exchange.cancel(coin, oid)
+                    if result.get("status") == "ok":
+                        cancelled += 1
+                except Exception as e:
+                    print(f"   ⚠️  Cancel failed fuer Order {oid}: {e}")
+
+        return {"success": True, "cancelled": cancelled, "total": len(coin_orders)}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 if __name__ == "__main__":
     import sys
     

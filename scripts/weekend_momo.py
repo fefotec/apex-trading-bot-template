@@ -38,6 +38,7 @@ MOMENTUM_THRESHOLD = 0.03  # 3%
 ATR_SL_MULTIPLIER = 1.5
 ATR_TP_MULTIPLIER = 3.0    # Ergibt 2:1 R:R
 MAX_RISK_PCT = 0.02         # 2% vom Konto
+KILL_SWITCH_DRAWDOWN = 0.50  # 50% drawdown = stop trading
 
 # Datenpfade (lokal und auf Server)
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
@@ -47,6 +48,7 @@ if os.path.exists("/data/.openclaw/workspace/projects/apex-trading/data"):
 
 WEEKEND_STATE_FILE = os.path.join(DATA_DIR, "weekend_momo_state.json")
 TRADES_FILE = os.path.join(DATA_DIR, "trades.json")
+CAPITAL_TRACKING_FILE = os.path.join(DATA_DIR, "capital_tracking.json")
 
 
 def load_state():
@@ -308,6 +310,39 @@ def execute_entry():
         send_telegram_message(msg)
         return
 
+    # === KILL-SWITCH ===
+    # Gesamtwert = Spot + Margin (bei offenen Positionen ist Kapital im Margin-Account)
+    margin_value = 0.0
+    try:
+        margin_state = client.get_account_state()
+        if "error" not in margin_state:
+            margin_value = float(margin_state.get("marginSummary", {}).get("accountValue", 0))
+    except Exception:
+        pass
+    total_value = balance + margin_value
+
+    start_capital = 2300  # Fallback
+    if os.path.exists(CAPITAL_TRACKING_FILE):
+        try:
+            with open(CAPITAL_TRACKING_FILE, 'r') as f:
+                tracking = json.load(f)
+            start_capital = tracking.get("adjusted_start_capital", tracking.get("start_capital", 2300))
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    drawdown = 1 - (total_value / start_capital)
+    if drawdown >= KILL_SWITCH_DRAWDOWN:
+        msg = (
+            f"🚨 WeekendMomo KILL-SWITCH!\n\n"
+            f"Drawdown: {drawdown*100:.1f}%\n"
+            f"Kontowert: ${total_value:,.2f} (Spot: ${balance:,.2f} + Margin: ${margin_value:,.2f})\n"
+            f"Start-Kapital: ${start_capital:,.2f}\n\n"
+            f"⛔ Kein Trade!"
+        )
+        print(f"\n🚨 KILL-SWITCH: Drawdown {drawdown*100:.1f}%")
+        send_telegram_message(msg)
+        return
+
     # Offene Positionen pruefen
     positions = client.get_positions()
     avax_positions = [p for p in positions if p.coin == ASSET]
@@ -371,6 +406,35 @@ def execute_entry():
 
     # SL platzieren
     sl_result = place_stop_loss(ASSET, stop_loss, size)
+
+    # KRITISCH: Wenn SL fehlschlaegt, Position sofort schliessen!
+    if not sl_result["success"]:
+        print(f"\n🚨 SL-PLATZIERUNG FEHLGESCHLAGEN! Schliesse Position sofort...")
+
+        # 3 Versuche fuer Rollback
+        rollback = {"success": False}
+        for attempt in range(1, 4):
+            print(f"   Rollback-Versuch {attempt}/3...")
+            rollback = place_market_order(ASSET, not is_buy, size, reduce_only=True)
+            if rollback["success"]:
+                break
+            if attempt < 3:
+                import time
+                time.sleep(2)
+
+        msg = (
+            f"🚨 WeekendMomo SL-ROLLBACK!\n\n"
+            f"Stop-Loss konnte nicht platziert werden.\n"
+            f"Fehler: {sl_result.get('error', 'unbekannt')}\n\n"
+            f"Position geschlossen: {'Erfolg' if rollback['success'] else '⛔ FEHLGESCHLAGEN nach 3 Versuchen!'}"
+        )
+        if not rollback["success"]:
+            msg += "\n\n⛔ ACHTUNG: UNGESICHERTE POSITION! Sofort manuell eingreifen!"
+        send_telegram_message(msg)
+        state["traded"] = False
+        save_state(state)
+        print("NO_REPLY")
+        return
 
     # TP platzieren
     tp_result = place_take_profit(ASSET, take_profit, size)

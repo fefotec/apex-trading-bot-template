@@ -4,8 +4,11 @@ cloudflared.pid
 webhook.pid
 *.log
 
-# Data directory
+# Data directory (live data, not in git)
 data/
+
+# Data backup IS tracked (for Claude Code review)
+!data-backup/
 
 # Python cache
 __pycache__/
