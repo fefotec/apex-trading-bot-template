@@ -67,6 +67,16 @@ def main():
     weekday = datetime.now(timezone.utc).strftime("%A")
     date_str = datetime.now(timezone.utc).strftime("%d.%m.%Y")
 
+    # API Wallet Ablauf pruefen
+    wallet_warning = ""
+    try:
+        from api_wallet_reminder import API_WALLET_EXPIRY
+        days_left = (API_WALLET_EXPIRY - datetime.now(timezone.utc)).days
+        if days_left <= 14:
+            wallet_warning = f"\n\n⚠️ API-Wallet laeuft in {days_left} Tagen ab!"
+    except Exception:
+        pass
+
     msg = (
         f"*APEX Heartbeat*\n"
         f"{date_str} ({weekday})\n\n"
@@ -75,6 +85,7 @@ def main():
         f"{pnl_text}\n\n"
         f"Positionen:\n{pos_text}\n\n"
         f"System: Crontab aktiv"
+        f"{wallet_warning}"
     )
 
     send_telegram_message(msg)
