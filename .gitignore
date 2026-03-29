@@ -2,6 +2,7 @@
 *.pid
 cloudflared.pid
 webhook.pid
+*.log
 
 # Data directory
 data/
@@ -13,3 +14,5 @@ __pycache__/
 
 # Environment files (already in config/)
 .env
+.env.*
+config/.env*
