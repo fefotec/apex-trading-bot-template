@@ -1,11 +1,11 @@
 {
   "starting_capital": 2300.54,
   "current_capital": 2300.32,
-  "total_pnl": 142.47578,
-  "realized_pnl": 142.47578,
+  "total_pnl": 174.145952,
+  "realized_pnl": 174.145952,
   "unrealized_pnl": 0.0,
-  "total_trades": 3,
-  "winning_trades": 2,
+  "total_trades": 4,
+  "winning_trades": 3,
   "losing_trades": 1,
   "test_trades": 1,
   "milestones": {
@@ -35,5 +35,5 @@
       "notes": "Erste vollautonome US-Session. Keine validen Breakouts. System funktioniert korrekt."
     }
   },
-  "last_updated": "2026-03-27T10:37:06.766906"
+  "last_updated": "2026-03-29T21:30:07.789240"
 }

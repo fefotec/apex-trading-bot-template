@@ -194,5 +194,18 @@
     },
     "timestamp": "2026-03-28T10:26:26.913662",
     "session": "eu"
+  },
+  {
+    "asset": "AVAX",
+    "direction": "close_short",
+    "entry_price": 8.7778,
+    "exit_price": 8.6191,
+    "size": 199.56,
+    "pnl": 31.670171999999923,
+    "pnl_pct": 1.80797010640479,
+    "close_reason": "sunday_timeout",
+    "timestamp": "2026-03-29T19:00:08.116885+00:00",
+    "session": "weekend_momo",
+    "strategy": "WeekendMomo"
   }
 ]

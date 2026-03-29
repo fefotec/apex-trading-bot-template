@@ -13,5 +13,7 @@
   "size": 199.56,
   "stop_loss": 9.023457142857142,
   "take_profit": 8.286485714285714,
-  "entry_time": "2026-03-28T06:43:25.372459"
+  "entry_time": "2026-03-28T06:43:25.372459",
+  "closed": true,
+  "close_reason": "sunday_timeout"
 }
