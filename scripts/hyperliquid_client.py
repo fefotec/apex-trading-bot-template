@@ -69,8 +69,13 @@ class HyperliquidClient:
             self._load_from_env()
     
     def _load_from_env(self):
-        """Lade Credentials aus .env File"""
+        """Lade Credentials aus .env File
+
+        Unterstuetzt API Wallets: Private Key kann von einer API-Wallet stammen,
+        waehrend HYPERLIQUID_WALLET die Haupt-Adresse fuer Info-Requests ist.
+        """
         env_file = os.path.join(CONFIG_DIR, ".env.hyperliquid")
+        wallet_address = None
         if os.path.exists(env_file):
             with open(env_file, 'r') as f:
                 for line in f:
@@ -80,8 +85,18 @@ class HyperliquidClient:
                         if key == 'HYPERLIQUID_PRIVATE_KEY':
                             self.private_key = value
                             self.account = Account.from_key(value)
-                            self.address = self.account.address
-                            print(f"✅ Wallet aus .env: {self.address[:10]}...")
+                        elif key == 'HYPERLIQUID_WALLET':
+                            wallet_address = value
+
+            # Haupt-Wallet Adresse fuer Info-Requests (Balance, Positionen)
+            # API-Wallet Adresse nur fuer Signing
+            if wallet_address:
+                self.address = wallet_address
+            elif self.account:
+                self.address = self.account.address
+
+            if self.address:
+                print(f"✅ Wallet aus .env: {self.address[:10]}...")
     
     @property
     def is_ready(self) -> bool:
