@@ -23,7 +23,7 @@ Max 1 Trade pro Wochenende, 2% Kontorisiko.
 import os
 import sys
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Imports aus dem Projekt
 from place_order import place_market_order, place_stop_loss, place_take_profit, load_credentials
@@ -77,7 +77,7 @@ def log_trade(trade_data):
 
     trades.append({
         **trade_data,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "session": "weekend_momo",
         "strategy": "WeekendMomo"
     })
@@ -107,7 +107,7 @@ def get_3day_momentum(client):
     for candle in candles:
         ts = candle.get("t", candle.get("time", 0))
         if isinstance(ts, (int, float)):
-            dt = datetime.utcfromtimestamp(ts / 1000 if ts > 1e12 else ts)
+            dt = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts, tz=timezone.utc)
         else:
             dt = datetime.fromisoformat(str(ts))
 
@@ -221,8 +221,8 @@ def check_momentum():
             "tuesday_close": tue_close,
             "friday_close": fri_close,
             "atr": atr,
-            "checked_at": datetime.utcnow().isoformat(),
-            "weekend_of": datetime.utcnow().strftime("%Y-%m-%d"),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "weekend_of": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "traded": False
         }
         save_state(state)
@@ -248,8 +248,8 @@ def check_momentum():
             "signal": False,
             "momentum": momentum,
             "momentum_pct": momentum_pct,
-            "checked_at": datetime.utcnow().isoformat(),
-            "weekend_of": datetime.utcnow().strftime("%Y-%m-%d"),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "weekend_of": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             "traded": False
         }
         save_state(state)
@@ -464,7 +464,7 @@ def execute_entry():
     state["size"] = size
     state["stop_loss"] = stop_loss
     state["take_profit"] = take_profit
-    state["entry_time"] = datetime.utcnow().isoformat()
+    state["entry_time"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
 
     # Telegram Notification

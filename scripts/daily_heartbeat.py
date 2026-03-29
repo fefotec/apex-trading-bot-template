@@ -10,7 +10,7 @@ Cron: Taeglich 07:00 Berlin (05:00 UTC)
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from telegram_sender import send_telegram_message
@@ -64,8 +64,8 @@ def main():
         )
 
     # Wochentag
-    weekday = datetime.utcnow().strftime("%A")
-    date_str = datetime.utcnow().strftime("%d.%m.%Y")
+    weekday = datetime.now(timezone.utc).strftime("%A")
+    date_str = datetime.now(timezone.utc).strftime("%d.%m.%Y")
 
     msg = (
         f"*APEX Heartbeat*\n"

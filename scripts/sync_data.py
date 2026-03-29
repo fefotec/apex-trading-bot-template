@@ -13,7 +13,7 @@ import sys
 import json
 import shutil
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Pfade
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,7 +55,7 @@ def sync_data():
 
     # Timestamp schreiben
     meta = {
-        "last_sync": datetime.utcnow().isoformat(),
+        "last_sync": datetime.now(timezone.utc).isoformat(),
         "synced_files": synced,
         "source": DATA_DIR
     }
@@ -84,7 +84,7 @@ def git_push():
             return True
 
         # Commit
-        date_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         subprocess.run(
             ["git", "commit", "-m", f"data-backup: {date_str}"],
             check=True,
