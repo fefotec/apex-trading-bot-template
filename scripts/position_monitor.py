@@ -246,11 +246,18 @@ Size: {total_size:.5f}
 if __name__ == "__main__":
     try:
         count = main()
+        from healthcheck import ping
+        ping("position_monitor")
         print("NO_REPLY")
         sys.exit(0)
     except Exception as e:
         print(f"\n💥 ERROR: {e}")
         import traceback
         traceback.print_exc()
+        try:
+            from healthcheck import ping
+            ping("position_monitor", "fail")
+        except Exception:
+            pass
         print("NO_REPLY")
         sys.exit(1)

@@ -498,11 +498,24 @@ def main():
 if __name__ == "__main__":
     try:
         result = main()
+        # Ping basierend auf aktueller Session
+        try:
+            from healthcheck import ping
+            session = get_current_session()
+            if session:
+                ping(f"session_{session}")
+        except Exception:
+            pass
         sys.exit(0)
     except Exception as e:
         print(f"\n💥 ERROR: {e}")
         import traceback
         traceback.print_exc()
         send_telegram_message(f"💥 APEX autonomous_trade.py ERROR: {e}")
+        try:
+            from healthcheck import ping
+            ping("session_error", "fail")
+        except Exception:
+            pass
         print("NO_REPLY")
         sys.exit(1)

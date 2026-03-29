@@ -85,8 +85,15 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+        from healthcheck import ping
+        ping("daily_heartbeat")
     except Exception as e:
         print(f"Heartbeat ERROR: {e}")
         send_telegram_message(f"Heartbeat ERROR: {e}")
+        try:
+            from healthcheck import ping
+            ping("daily_heartbeat", "fail")
+        except Exception:
+            pass
         print("NO_REPLY")
         sys.exit(1)
