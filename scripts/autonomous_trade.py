@@ -428,7 +428,38 @@ def scan_for_breakouts():
         direction = check_breakout(asset, current_price, box["high"], box["low"], threshold)
 
         if direction:
-            # Found breakout!
+            # === CANDLE-CLOSE CONFIRMATION ===
+            # Nicht nur Mid-Price checken: der letzte abgeschlossene 5m-Candle
+            # muss komplett ausserhalb der Box geschlossen haben.
+            try:
+                candles_5m = client.get_candles(asset, interval="5m", limit=2)
+                if candles_5m and len(candles_5m) >= 2:
+                    last_closed = candles_5m[-2]  # Vorletzte = letzte abgeschlossene
+                    candle_close = last_closed["close"]
+
+                    if direction == "long" and candle_close <= box["high"]:
+                        print(f"   ⏭️  {asset}: Mid-Price ueber Box, aber 5m-Candle Close ${candle_close:,.2f} <= Box High ${box['high']:,.2f} -- Skip")
+                        continue
+                    elif direction == "short" and candle_close >= box["low"]:
+                        print(f"   ⏭️  {asset}: Mid-Price unter Box, aber 5m-Candle Close ${candle_close:,.2f} >= Box Low ${box['low']:,.2f} -- Skip")
+                        continue
+                    print(f"   ✅ {asset}: Candle-Close bestaetigt (${candle_close:,.2f})")
+            except Exception as e:
+                print(f"   ⚠️  Candle-Check fehlgeschlagen: {e} -- fahre fort")
+
+            # === SPREAD-CHECK ===
+            # Zu hoher Spread = versteckte Kosten. Abbrechen wenn > 0.1%
+            try:
+                book = client.get_orderbook(asset)
+                spread = book.get("spread_pct", 0)
+                if spread > 0.1:
+                    print(f"   ⏭️  {asset}: Spread zu hoch ({spread:.3f}% > 0.1%) -- Skip")
+                    continue
+                print(f"   ✅ {asset}: Spread OK ({spread:.4f}%)")
+            except Exception as e:
+                print(f"   ⚠️  Spread-Check fehlgeschlagen: {e} -- fahre fort")
+
+            # Alle Checks bestanden!
             best_breakout = {
                 "asset": asset,
                 "direction": direction,
