@@ -15,8 +15,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts.hyperliquid_client import HyperliquidClient
 
 # Files
-STATE_FILE = "/data/.openclaw/workspace/projects/apex-trading/data/monitor_state.json"
-PNL_TRACKER_FILE = "/data/.openclaw/workspace/projects/apex-trading/data/pnl_tracker.json"
+DATA_DIR = "/data/.openclaw/workspace/projects/apex-trading/data"
+STATE_FILE = os.path.join(DATA_DIR, "monitor_state.json")
+PNL_TRACKER_FILE = os.path.join(DATA_DIR, "pnl_tracker.json")
+CAPITAL_TRACKING_FILE = os.path.join(DATA_DIR, "capital_tracking.json")
 
 
 def load_state():
@@ -232,14 +234,56 @@ Size: {total_size:.5f}
     else:
         print("\n⏸️  Keine offenen Positionen")
     
+    # === DEPOSIT-ERKENNUNG ===
+    # Vergleiche Spot-Balance mit letztem bekannten Wert.
+    # Wenn sie um >$50 gestiegen ist ohne dass ein Trade geschlossen wurde,
+    # ist es wahrscheinlich eine Einzahlung.
+    try:
+        spot_balance = client.get_balance()
+        last_spot = state.get("last_spot_balance", 0)
+
+        # Nur pruefen wenn wir einen vorherigen Wert haben UND keine Position gerade geschlossen wurde
+        if last_spot > 0 and not (last_count > 0 and current_count == 0):
+            diff = spot_balance - last_spot
+            if diff > 50:  # Mehr als $50 Anstieg ohne Trade-Close = wahrscheinlich Deposit
+                # Capital Tracking aktualisieren
+                if os.path.exists(CAPITAL_TRACKING_FILE):
+                    with open(CAPITAL_TRACKING_FILE, 'r') as f:
+                        cap = json.load(f)
+
+                    deposit_amount = round(diff, 2)
+                    cap["deposits"].append({
+                        "date": datetime.now().strftime("%Y-%m-%d"),
+                        "amount": deposit_amount,
+                        "reason": "Automatisch erkannt",
+                        "new_total": round(cap["adjusted_start_capital"] + deposit_amount, 2)
+                    })
+                    cap["total_deposits"] = round(cap.get("total_deposits", 0) + deposit_amount, 2)
+                    cap["adjusted_start_capital"] = round(cap["adjusted_start_capital"] + deposit_amount, 2)
+
+                    with open(CAPITAL_TRACKING_FILE, 'w') as f:
+                        json.dump(cap, f, indent=2)
+
+                    msg = (
+                        f"💰 EINZAHLUNG ERKANNT!\n\n"
+                        f"Betrag: ${deposit_amount:,.2f}\n"
+                        f"Neues Start-Kapital: ${cap['adjusted_start_capital']:,.2f}\n\n"
+                        f"Automatisch angepasst - zaehlt nicht als Gewinn."
+                    )
+                    print(f"\n💰 Deposit erkannt: ${deposit_amount:,.2f}")
+                    send_telegram_notification(msg)
+    except Exception as e:
+        print(f"  Deposit-Check Fehler: {e}")
+
     # Save new state (inkl. Coin-Liste fuer Orphan-Cleanup)
     position_coins = [p.coin for p in positions]
     save_state({
         "last_position_count": current_count,
         "last_position_coins": position_coins,
+        "last_spot_balance": client.get_balance(),
         "last_check": datetime.now().isoformat()
     })
-    
+
     return current_count
 
 
