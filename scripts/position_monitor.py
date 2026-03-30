@@ -19,6 +19,7 @@ DATA_DIR = "/data/.openclaw/workspace/projects/apex-trading/data"
 STATE_FILE = os.path.join(DATA_DIR, "monitor_state.json")
 PNL_TRACKER_FILE = os.path.join(DATA_DIR, "pnl_tracker.json")
 CAPITAL_TRACKING_FILE = os.path.join(DATA_DIR, "capital_tracking.json")
+TRADES_FILE = os.path.join(DATA_DIR, "trades.json")
 
 
 def load_state():
@@ -75,6 +76,50 @@ def cleanup_orphan_orders(coin, current_positions):
             print(f"   ⚠️  Orphan-Cleanup Fehler: {result.get('error')}")
     except Exception as e:
         print(f"   ⚠️  Orphan-Cleanup Exception: {e}")
+
+
+def update_trade_exit(coin, exit_price, pnl, exit_reason="sl_or_tp"):
+    """
+    Ergaenze den letzten offenen Trade fuer diesen Coin mit Exit-Daten.
+    Damit ist der komplette Trade-Lifecycle in trades.json dokumentiert.
+    """
+    if not os.path.exists(TRADES_FILE):
+        print(f"   ⚠️  trades.json nicht gefunden")
+        return
+
+    try:
+        with open(TRADES_FILE, 'r') as f:
+            trades = json.load(f)
+
+        # Finde den letzten Trade fuer diesen Coin der noch keinen Exit hat
+        updated = False
+        for trade in reversed(trades):
+            if trade.get("asset") == coin and "exit_price" not in trade:
+                trade["exit_price"] = exit_price
+                trade["exit_pnl"] = round(pnl, 2)
+                trade["exit_reason"] = exit_reason
+                trade["exit_time"] = datetime.now().isoformat()
+
+                # Dauer berechnen
+                try:
+                    entry_time = datetime.fromisoformat(trade["timestamp"])
+                    duration = datetime.now() - entry_time
+                    trade["duration_minutes"] = round(duration.total_seconds() / 60, 1)
+                except (KeyError, ValueError):
+                    pass
+
+                updated = True
+                print(f"   📝 Trade-Exit geloggt: {coin} → ${pnl:+.2f} ({exit_reason})")
+                break
+
+        if updated:
+            with open(TRADES_FILE, 'w') as f:
+                json.dump(trades, f, indent=2)
+        else:
+            print(f"   ⚠️  Kein offener Trade fuer {coin} in trades.json gefunden")
+
+    except Exception as e:
+        print(f"   ⚠️  Trade-Exit Logging Fehler: {e}")
 
 
 def update_pnl_tracker(pnl):
@@ -218,6 +263,14 @@ Size: {total_size:.5f}
             print("\n📢 Sende Telegram-Benachrichtigung...")
             send_telegram_notification(message)
             
+            # Exit-Daten in trades.json zurueckschreiben
+            exit_reason = "sl_or_tp"  # Default
+            if "Close Long" in direction:
+                exit_reason = "tp" if total_pnl > 0 else "sl"
+            elif "Close Short" in direction:
+                exit_reason = "tp" if total_pnl > 0 else "sl"
+            update_trade_exit(coin, exit_price, total_pnl, exit_reason)
+
             # Update P&L tracker
             update_pnl_tracker(total_pnl)
                 

@@ -584,7 +584,7 @@ def execute_exit():
         print(f"\n{result_emoji} Position geschlossen: ${final_pnl:,.2f} ({final_pnl_pct:+.2f}%)")
         send_telegram_message(msg)
 
-        # Trade loggen
+        # Trade loggen (Close-Eintrag)
         log_trade({
             "asset": ASSET,
             "direction": f"close_{direction}",
@@ -595,6 +595,25 @@ def execute_exit():
             "pnl_pct": final_pnl_pct,
             "close_reason": "sunday_timeout"
         })
+
+        # Exit-Daten im Entry-Trade ergaenzen
+        try:
+            if os.path.exists(TRADES_FILE):
+                with open(TRADES_FILE, 'r') as f:
+                    trades = json.load(f)
+                for trade in reversed(trades):
+                    if (trade.get("asset") == ASSET
+                            and trade.get("strategy") == "WeekendMomo"
+                            and "exit_price" not in trade):
+                        trade["exit_price"] = close_price
+                        trade["exit_pnl"] = round(final_pnl, 2)
+                        trade["exit_reason"] = "sunday_timeout"
+                        trade["exit_time"] = datetime.now(timezone.utc).isoformat()
+                        break
+                with open(TRADES_FILE, 'w') as f:
+                    json.dump(trades, f, indent=2)
+        except Exception as e:
+            print(f"   Exit-Logging Fehler: {e}")
 
     else:
         msg = f"❌ WeekendMomo: Close fehlgeschlagen - {close_result.get('error')}"
