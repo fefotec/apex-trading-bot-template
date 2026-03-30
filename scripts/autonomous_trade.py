@@ -218,24 +218,30 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low, ris
     Returns:
         dict: Trade result
     """
-    # Calculate SL
+    # Calculate SL: Prozentual statt flat $10 (funktioniert fuer alle Assets)
+    box_range = box_high - box_low
+    sl_buffer = max(box_range * 0.1, entry_price * 0.001)  # 10% der Box oder 0.1% vom Preis
     if direction == "long":
-        stop_loss = box_low - 10  # $10 below box
+        stop_loss = box_low - sl_buffer
     else:
-        stop_loss = box_high + 10  # $10 above box
+        stop_loss = box_high + sl_buffer
 
     # Calculate position size
     size = calculate_position_size(risk_usd, entry_price, stop_loss)
 
-    # Round size appropriately
-    if asset in ["BTC", "ETH"]:
-        size = round(size, 5)  # 5 decimals
-    else:
-        size = round(size, 4)
+    # Size runden ueber place_order Regeln (zentral definiert)
+    from place_order import round_size, ASSET_RULES
+    size = round_size(asset, size)
+    rules = ASSET_RULES.get(asset, {"min_size": 0.01})
 
-    # Minimum size check
-    if asset == "BTC" and size < 0.00001:
-        return {"success": False, "error": "Size too small"}
+    # Minimum size + Max position value check
+    if size < rules["min_size"]:
+        return {"success": False, "error": f"Size too small ({size} < {rules['min_size']})"}
+
+    max_position_value = entry_price * size
+    balance = risk_usd / MAX_RISK_PCT  # Rueckrechnung aus Risk
+    if max_position_value > balance * 5:  # Max 5x Leverage effektiv
+        return {"success": False, "error": f"Position too large (${max_position_value:.0f} > 5x ${balance:.0f})"}
 
     # Place market order
     is_buy = (direction == "long")

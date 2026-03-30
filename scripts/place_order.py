@@ -18,6 +18,30 @@ CONFIG_DIR = os.path.join(PROJECT_DIR, "config")
 ENV_FILE = os.path.join(CONFIG_DIR, ".env.hyperliquid")
 
 
+# Hyperliquid Tick-Size und Size-Regeln pro Asset
+# Tick Size = kleinste Preisaenderung, szDecimals = Dezimalstellen fuer Size
+ASSET_RULES = {
+    "BTC":  {"tick": 0.1,    "sz_decimals": 5, "min_size": 0.001},
+    "ETH":  {"tick": 0.01,   "sz_decimals": 4, "min_size": 0.01},
+    "SOL":  {"tick": 0.01,   "sz_decimals": 2, "min_size": 0.1},
+    "AVAX": {"tick": 0.001,  "sz_decimals": 2, "min_size": 1.0},
+    "ARB":  {"tick": 0.0001, "sz_decimals": 1, "min_size": 1.0},
+    "OP":   {"tick": 0.001,  "sz_decimals": 1, "min_size": 1.0},
+}
+
+
+def round_price(coin, price):
+    """Runde Preis auf die Tick-Size des Assets"""
+    tick = ASSET_RULES.get(coin, {"tick": 0.01})["tick"]
+    return round(round(price / tick) * tick, 8)
+
+
+def round_size(coin, size):
+    """Runde Size auf erlaubte Dezimalstellen des Assets"""
+    decimals = ASSET_RULES.get(coin, {"sz_decimals": 2})["sz_decimals"]
+    return round(size, decimals)
+
+
 def load_credentials():
     """Lade Private Key aus .env"""
     private_key = None
@@ -82,12 +106,10 @@ def place_market_order(
         else:
             limit_price = current_price * (1 - slippage)
         
-        # Round price appropriately (BTC/ETH use $1 tick size)
-        if coin in ["BTC", "ETH"]:
-            limit_price = round(limit_price)  # Whole dollars
-        else:
-            limit_price = round(limit_price, 4)
-        
+        # Preis und Size auf Exchange-Regeln runden
+        limit_price = round_price(coin, limit_price)
+        size = round_size(coin, size)
+
         # Place order
         order_result = exchange.order(
             name=coin,
@@ -183,14 +205,10 @@ def place_stop_loss(
             trigger_px = trigger_price
             limit_px = trigger_price * 1.01  # 1% above trigger
         
-        # Round (BTC/ETH use $1 tick size)
-        if coin in ["BTC", "ETH"]:
-            trigger_px = round(trigger_px)  # Whole dollars
-            limit_px = round(limit_px)
-        else:
-            trigger_px = round(trigger_px, 4)
-            limit_px = round(limit_px, 4)
-        
+        # Preis auf Exchange-Regeln runden
+        trigger_px = round_price(coin, trigger_px)
+        limit_px = round_price(coin, limit_px)
+
         # Place stop-loss order
         order_result = exchange.order(
             name=coin,
@@ -280,14 +298,10 @@ def place_take_profit(
             trigger_px = trigger_price
             limit_px = trigger_price * 1.001  # Slightly above trigger
         
-        # Round (BTC/ETH use $1 tick size)
-        if coin in ["BTC", "ETH"]:
-            trigger_px = round(trigger_px)  # Whole dollars
-            limit_px = round(limit_px)
-        else:
-            trigger_px = round(trigger_px, 4)
-            limit_px = round(limit_px, 4)
-        
+        # Preis auf Exchange-Regeln runden
+        trigger_px = round_price(coin, trigger_px)
+        limit_px = round_price(coin, limit_px)
+
         # Place take-profit order
         order_result = exchange.order(
             name=coin,
