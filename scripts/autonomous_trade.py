@@ -336,46 +336,97 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low, ris
     }
 
 
+def calculate_atr(client, asset, interval="15m", periods=14):
+    """
+    Berechne ATR (Average True Range) fuer ein Asset.
+    Misst die durchschnittliche Volatilitaet -- wird als Breakout-Threshold genutzt.
+
+    Returns:
+        float: ATR Wert oder None bei Fehler
+    """
+    try:
+        candles = client.get_candles(asset, interval=interval, limit=periods + 1)
+        if not candles or len(candles) < periods + 1:
+            return None
+
+        true_ranges = []
+        for i in range(1, len(candles)):
+            high = candles[i]["high"]
+            low = candles[i]["low"]
+            prev_close = candles[i - 1]["close"]
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            true_ranges.append(tr)
+
+        return sum(true_ranges[-periods:]) / min(periods, len(true_ranges))
+    except Exception as e:
+        print(f"   ⚠️  ATR-Berechnung fehlgeschlagen fuer {asset}: {e}")
+        return None
+
+
+# Minimum Box-Groesse: Wenn die Opening Range kleiner als 1x ATR ist,
+# ist sie zu eng und Breakouts sind wahrscheinlich Noise.
+MIN_BOX_ATR_RATIO = 1.0
+
+# Breakout-Threshold: Preis muss mindestens 0.5x ATR ueber/unter der Box sein
+BREAKOUT_ATR_MULTIPLIER = 0.5
+
+
 def scan_for_breakouts():
     """
-    Scanne alle Assets auf Breakouts
-    Berücksichtigt offene Positionen: Asset mit Position wird geskippt
-    
+    Scanne alle Assets auf Breakouts.
+    Nutzt ATR-basierte Thresholds statt fester Dollar-Betraege.
+    Filtert zu enge Boxen automatisch raus.
+
     Returns:
         dict: Best breakout opportunity oder None
     """
     boxes = load_boxes()
-    
+
     if not boxes:
         return {"success": False, "error": "No boxes loaded"}
-    
+
     client = HyperliquidClient()
-    
+
     # Check which assets already have positions
     positions = client.get_positions()
     position_assets = [p.coin for p in positions]
-    
+
     # Priority: BTC > ETH > SOL > AVAX
     priority = ["BTC", "ETH", "SOL", "AVAX"]
-    
+
     best_breakout = None
-    
+
     for asset in priority:
         # Skip if asset already has a position
         if asset in position_assets:
             print(f"   ⏭️  {asset}: Skipped (position already open)")
             continue
-        
+
         if asset not in boxes:
             continue
-        
+
         box = boxes[asset]
         current_price = client.get_price(asset)
-        
-        # Check breakout
-        threshold = 50 if asset in ["BTC", "ETH"] else (current_price * 0.02)
+        box_size = box["high"] - box["low"]
+
+        # ATR-basierter Threshold
+        atr = calculate_atr(client, asset)
+        if atr and atr > 0:
+            threshold = atr * BREAKOUT_ATR_MULTIPLIER
+
+            # Box zu eng? (kleiner als 1x ATR = wahrscheinlich Noise)
+            if box_size < atr * MIN_BOX_ATR_RATIO:
+                print(f"   ⏭️  {asset}: Box zu eng (${box_size:,.2f} < ATR ${atr:,.2f}) -- Skip")
+                continue
+
+            print(f"   📐 {asset}: ATR=${atr:,.2f}, Threshold=${threshold:,.2f}, Box=${box_size:,.2f}")
+        else:
+            # Fallback wenn ATR nicht berechnet werden kann
+            threshold = current_price * 0.005  # 0.5% als Minimum
+            print(f"   ⚠️  {asset}: ATR nicht verfuegbar, Fallback ${threshold:,.2f}")
+
         direction = check_breakout(asset, current_price, box["high"], box["low"], threshold)
-        
+
         if direction:
             # Found breakout!
             best_breakout = {
@@ -384,10 +435,12 @@ def scan_for_breakouts():
                 "current_price": current_price,
                 "box_high": box["high"],
                 "box_low": box["low"],
-                "breakout_size": abs(current_price - (box["high"] if direction == "long" else box["low"]))
+                "breakout_size": abs(current_price - (box["high"] if direction == "long" else box["low"])),
+                "atr": atr,
+                "threshold": threshold
             }
             break  # Take first (highest priority)
-    
+
     return best_breakout
 
 
@@ -451,6 +504,8 @@ def main():
     print(f"   Current: ${breakout['current_price']:,.2f}")
     print(f"   Box: ${breakout['box_low']:,.2f} - ${breakout['box_high']:,.2f}")
     print(f"   Breakout Size: ${breakout['breakout_size']:,.2f}")
+    if breakout.get('atr'):
+        print(f"   ATR: ${breakout['atr']:,.2f} | Threshold: ${breakout['threshold']:,.2f}")
 
     # Execute trade (mit dynamischem Risk)
     print(f"\n🚀 Executing {breakout['direction']} trade (Risk: ${risk_usd:,.2f})...")
