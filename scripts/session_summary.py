@@ -2,7 +2,7 @@
 """
 APEX - Session Summary Reporter
 ================================
-Sendet freundliche Session-Zusammenfassungen an Christian.
+Sendet freundliche Session-Zusammenfassungen per Telegram.
 Wird von Final-Check Crons aufgerufen.
 """
 

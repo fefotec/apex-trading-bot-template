@@ -168,7 +168,7 @@ Alle Trades werden in `FORTSCHRITT.md` dokumentiert:
 
 ## 📞 Support
 
-Bei Fragen: Siehe `PROJEKT.md` oder kontaktiere Christian (@fefotec)
+Bei Fragen: Siehe `PROJEKT.md`
 
 ---
 
