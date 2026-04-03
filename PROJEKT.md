@@ -99,9 +99,9 @@ USA SESSION (Mo-Fr):
 ```
 
 ### API-Zugang
-- **Status:** Konfigurierbar
-- **Wallet:** Deine Hyperliquid Wallet-Adresse in `config/.env.hyperliquid`
-- **Credentials:** `config/.env.hyperliquid` (siehe `.env.example` Dateien)
+- **Status:** ✅ LIVE (seit 2026-03-23)
+- **Wallet:** `your_wallet_address`
+- **Credentials:** `config/.env.hyperliquid`
 
 ---
 
@@ -138,13 +138,13 @@ apex-trading/
 | Leverage | Max 5x (konservativ starten) |
 
 ### Kill-Switch
-Bei 50% Drawdown (1000€ verbleibend) → Automatische Pause, den Owner benachrichtigen.
+Bei 50% Drawdown (1000€ verbleibend) → Automatische Pause, Christian benachrichtigen.
 
 ---
 
 ## 📞 Kontakt & Reporting
 
-- **Owner:** den Owner Fischer
+- **Owner:** Christian Fischer
 - **Channel:** Telegram
 - **Reports:** Nach jedem Trade + Daily Summary
 
@@ -158,7 +158,7 @@ Bei 50% Drawdown (1000€ verbleibend) → Automatische Pause, den Owner benachr
 - Strategie-Anpassungen innerhalb der Regeln
 - Wie ich meine Arbeit organisiere
 
-**den Owners Regeln (bindend):**
+**Christians Regeln (bindend):**
 - ORB-Strategie wie beschrieben
 - Max 2 Trades pro Tag
 - 2% Risk pro Trade

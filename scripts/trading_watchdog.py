@@ -7,7 +7,8 @@ Läuft alle 30 Min und prüft:
 - Laufen kritische Prozesse (Webhook)?
 - Gibt es unerwartete Fehler?
 
-Bei Problemen: Automatisch fixen oder per Telegram alarmieren.
+Bei Problemen: Automatisch fixen oder Christian alarmieren.
+Läuft bis 31. März 2026.
 """
 
 import os

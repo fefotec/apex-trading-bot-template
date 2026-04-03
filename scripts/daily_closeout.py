@@ -58,8 +58,17 @@ def run_daily_closeout():
 
     lines = ["\U0001f4c8 APEX Tages-Abschluss\n"]
 
-    # Balance
-    balance = client.get_balance()
+    # Balance (Spot + Margin, damit bei offenen Positionen der volle Wert angezeigt wird)
+    spot = client.get_balance()
+    margin_value = 0.0
+    try:
+        state = client.get_account_state()
+        if "error" not in state:
+            margin_summary = state.get("marginSummary", {})
+            margin_value = float(margin_summary.get("accountValue", 0))
+    except Exception:
+        pass
+    balance = spot + margin_value
     lines.append(f"\U0001f4b0 Balance: ${balance:,.2f} USDC")
 
     # Gesamt P&L

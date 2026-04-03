@@ -2,7 +2,7 @@
 """
 APEX - Session Summary Reporter
 ================================
-Sendet freundliche Session-Zusammenfassungen per Telegram.
+Sendet freundliche Session-Zusammenfassungen an Christian.
 Wird von Final-Check Crons aufgerufen.
 """
 
@@ -43,9 +43,18 @@ def load_boxes():
 
 
 def get_balance():
-    """Hole aktuelle Balance"""
+    """Hole aktuelle Balance (Spot + Margin, damit bei offenen Positionen der volle Wert angezeigt wird)"""
     client = HyperliquidClient()
-    return client.get_balance()
+    spot = client.get_balance()
+    margin_value = 0.0
+    try:
+        state = client.get_account_state()
+        if "error" not in state:
+            margin_summary = state.get("marginSummary", {})
+            margin_value = float(margin_summary.get("accountValue", 0))
+    except Exception:
+        pass
+    return spot + margin_value
 
 
 def get_capital_tracking():
@@ -81,16 +90,35 @@ def calculate_pnl(current_balance):
     }
 
 
-def check_breakout(asset, price, box_high, box_low):
+MIN_BOX_ATR_RATIO = 0.6
+BREAKOUT_ATR_MULTIPLIER = 0.5
+
+
+def calculate_atr(client, asset, interval="15m", periods=14):
+    """ATR berechnen (gleiche Logik wie autonomous_trade.py)"""
+    try:
+        candles = client.get_candles(asset, interval=interval, limit=periods + 1)
+        if not candles or len(candles) < periods + 1:
+            return None
+
+        true_ranges = []
+        for i in range(1, len(candles)):
+            high = candles[i]["high"]
+            low = candles[i]["low"]
+            prev_close = candles[i - 1]["close"]
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            true_ranges.append(tr)
+
+        return sum(true_ranges[-periods:]) / min(periods, len(true_ranges))
+    except Exception:
+        return None
+
+
+def check_breakout(asset, price, box_high, box_low, threshold):
     """
-    Check ob Breakout vorliegt
+    Check ob Breakout vorliegt (ATR-basiert, gleiche Logik wie autonomous_trade.py)
     Returns: "long", "short", or None
     """
-    if asset in ["BTC", "ETH"]:
-        threshold = 50
-    else:
-        threshold = price * 0.02  # 2%
-    
     if price > box_high + threshold:
         return "long"
     elif price < box_low - threshold:
@@ -102,42 +130,59 @@ def has_traded_in_session(session):
     """Check ob in dieser Session bereits getradet wurde"""
     if not os.path.exists(TRADES_FILE):
         return False, None
-    
+
     with open(TRADES_FILE, 'r') as f:
         trades = json.load(f)
-    
+
     today = datetime.now().date().isoformat()
-    
+
     for trade in trades:
         trade_date = trade["timestamp"][:10]
         trade_session = trade.get("session", "unknown")
-        
+
         if trade_date == today and trade_session == session:
             return True, trade
-    
+
     return False, None
 
 
 def get_session_breakouts():
-    """Scanne alle Assets auf Breakouts"""
+    """Scanne alle Assets auf Breakouts (ATR-basiert, gleiche Filter wie autonomous_trade.py)"""
     boxes = load_boxes()
-    
+
     if not boxes:
         return {}
-    
+
     client = HyperliquidClient()
     breakouts = {}
-    
+
     for asset in ASSETS:
         if asset not in boxes:
             breakouts[asset] = {"status": "no_box", "direction": None}
             continue
-        
+
         box = boxes[asset]
         current_price = client.get_price(asset)
-        
-        direction = check_breakout(asset, current_price, box["high"], box["low"])
-        
+        box_size = box["high"] - box["low"]
+
+        atr = calculate_atr(client, asset)
+        if atr and atr > 0:
+            threshold = atr * BREAKOUT_ATR_MULTIPLIER
+
+            if box_size < atr * MIN_BOX_ATR_RATIO:
+                breakouts[asset] = {
+                    "status": "box_too_tight",
+                    "direction": None,
+                    "price": current_price,
+                    "box_size": box_size,
+                    "atr": atr
+                }
+                continue
+        else:
+            threshold = current_price * 0.005
+
+        direction = check_breakout(asset, current_price, box["high"], box["low"], threshold)
+
         if direction:
             breakout_size = abs(current_price - (box["high"] if direction == "long" else box["low"]))
             breakouts[asset] = {
@@ -154,7 +199,7 @@ def get_session_breakouts():
                 "direction": None,
                 "price": current_price
             }
-    
+
     return breakouts
 
 
@@ -194,6 +239,8 @@ def format_summary(session):
             direction_icon = "🔴" if b["direction"] == "long" else "🔵"
             direction_text = b["direction"].upper()
             lines.append(f"  • {asset}: {direction_icon} **{direction_text}** Breakout (${b['breakout_size']:.2f})")
+        elif b["status"] == "box_too_tight":
+            lines.append(f"  • {asset}: ⏭️ Box zu eng (${b['box_size']:.2f} < ATR ${b['atr']:.2f})")
         else:
             lines.append(f"  • {asset}: ✅ Kein Breakout")
     
@@ -206,17 +253,22 @@ def format_summary(session):
         entry = trade_data.get("entry_price", 0)
         lines.append(f"**Trade:** ✅ **{asset} {direction}** @ ${entry:,.2f}")
     else:
+        # Check ob es nur "box_too_tight" Eintraege gab (kein echter Breakout)
+        any_box_tight = any(breakouts.get(a, {}).get("status") == "box_too_tight" for a in ASSETS)
+
         if any_breakout:
-            # Warum nicht getradet?
+            # Echten Breakout erkannt aber nicht getradet - warum?
             client = HyperliquidClient()
             positions = client.get_positions()
-            
+
             if positions:
                 lines.append(f"**Trade:** ❌ Nicht ausgeführt")
                 lines.append(f"**Grund:** Position bereits offen ({positions[0].coin} {('LONG' if positions[0].size > 0 else 'SHORT')})")
             else:
                 lines.append(f"**Trade:** ❌ Nicht ausgeführt")
                 lines.append(f"**Grund:** Unbekannt (Script-Check nötig!)")
+        elif any_box_tight:
+            lines.append(f"**Trade:** ✅ Korrekt geskippt (Boxen zu eng)")
         else:
             lines.append(f"**Trade:** ✅ Korrekt geskippt (kein Breakout)")
     

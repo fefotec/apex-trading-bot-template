@@ -15,6 +15,7 @@ from scripts.hyperliquid_client import HyperliquidClient
 from telegram_sender import send_telegram_message
 
 BOXES_FILE = "/data/.openclaw/workspace/projects/apex-trading/data/opening_range_boxes.json"
+BOX_ARCHIVE_FILE = "/data/.openclaw/workspace/projects/apex-trading/data/box_archive.json"
 
 
 def save_opening_range():
@@ -51,6 +52,27 @@ def save_opening_range():
         print(f"   Low:  ${candle['low']:,.2f}")
         print(f"   Range: ${candle['high'] - candle['low']:,.2f}")
     
+    # Archiviere aktuelle Boxen bevor sie ueberschrieben werden
+    if os.path.exists(BOXES_FILE):
+        try:
+            with open(BOXES_FILE, 'r') as f:
+                old_boxes = json.load(f)
+            if old_boxes:
+                archive = []
+                if os.path.exists(BOX_ARCHIVE_FILE):
+                    with open(BOX_ARCHIVE_FILE, 'r') as f:
+                        archive = json.load(f)
+                archive.append({
+                    "archived_at": datetime.now().isoformat(),
+                    "boxes": old_boxes
+                })
+                # Max 200 Eintraege behalten (ca. 2 Monate bei 3 Sessions/Tag)
+                archive = archive[-200:]
+                with open(BOX_ARCHIVE_FILE, 'w') as f:
+                    json.dump(archive, f, indent=2)
+        except (json.JSONDecodeError, IOError):
+            pass
+
     # Save
     os.makedirs(os.path.dirname(BOXES_FILE), exist_ok=True)
     with open(BOXES_FILE, 'w') as f:

@@ -18,27 +18,64 @@ CONFIG_DIR = os.path.join(PROJECT_DIR, "config")
 ENV_FILE = os.path.join(CONFIG_DIR, ".env.hyperliquid")
 
 
-# Hyperliquid Tick-Size und Size-Regeln pro Asset
-# Tick Size = kleinste Preisaenderung, szDecimals = Dezimalstellen fuer Size
+# Hyperliquid Preis- und Size-Regeln
+# Quelle: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size
+#
+# PREIS-REGELN (Perps):
+#   - Max 5 signifikante Stellen (significant figures)
+#   - Max (MAX_DECIMALS - szDecimals) Dezimalstellen
+#   - MAX_DECIMALS = 6 fuer Perps, 8 fuer Spot
+#   - Integer-Preise sind IMMER erlaubt (egal wie viele Stellen)
+#
+# SIZE-REGELN:
+#   - Runde auf szDecimals Dezimalstellen
+#
+# szDecimals kommt aus der API (info.meta()["universe"])
+# Hier als Fallback gecacht, da sich die Werte selten aendern.
+
+MAX_DECIMALS_PERP = 6
+MAX_SIG_FIGS = 5
+
+SZ_DECIMALS = {
+    "BTC": 5, "ETH": 4, "SOL": 2, "AVAX": 2,
+    "ARB": 1, "OP": 1,
+}
+
+# Minimale Order-Groessen pro Asset (Hyperliquid-Minimum)
+MIN_SIZES = {
+    "BTC": 0.001, "ETH": 0.01, "SOL": 0.1, "AVAX": 1.0,
+    "ARB": 1.0, "OP": 1.0,
+}
+
+# ASSET_RULES: Kompatibilitaet mit autonomous_trade.py
+# Kombiniert SZ_DECIMALS + MIN_SIZES in das alte Format
 ASSET_RULES = {
-    "BTC":  {"tick": 0.1,    "sz_decimals": 5, "min_size": 0.001},
-    "ETH":  {"tick": 0.01,   "sz_decimals": 4, "min_size": 0.01},
-    "SOL":  {"tick": 0.01,   "sz_decimals": 2, "min_size": 0.1},
-    "AVAX": {"tick": 0.001,  "sz_decimals": 2, "min_size": 1.0},
-    "ARB":  {"tick": 0.0001, "sz_decimals": 1, "min_size": 1.0},
-    "OP":   {"tick": 0.001,  "sz_decimals": 1, "min_size": 1.0},
+    coin: {"sz_decimals": SZ_DECIMALS[coin], "min_size": MIN_SIZES[coin]}
+    for coin in SZ_DECIMALS
 }
 
 
 def round_price(coin, price):
-    """Runde Preis auf die Tick-Size des Assets"""
-    tick = ASSET_RULES.get(coin, {"tick": 0.01})["tick"]
-    return round(round(price / tick) * tick, 8)
+    """
+    Runde Preis nach Hyperliquid-Regeln.
+    Identisch mit dem offiziellen SDK (exchange.py _slippage_price):
+      round(float(f"{px:.5g}"), 6 - szDecimals)
+
+    1. f"{price:.5g}" -> auf 5 signifikante Stellen formatieren
+    2. round(..., 6 - szDecimals) -> auf max Dezimalstellen runden
+    """
+    if price == 0:
+        return 0.0
+
+    sz_dec = SZ_DECIMALS.get(coin, 2)
+    max_decimals = MAX_DECIMALS_PERP - sz_dec
+
+    return round(float(f"{price:.5g}"), max_decimals)
 
 
 def round_size(coin, size):
-    """Runde Size auf erlaubte Dezimalstellen des Assets"""
-    decimals = ASSET_RULES.get(coin, {"sz_decimals": 2})["sz_decimals"]
+    """Runde Size auf erlaubte Dezimalstellen (szDecimals aus API)"""
+    decimals = SZ_DECIMALS.get(coin, 2)
     return round(size, decimals)
 
 

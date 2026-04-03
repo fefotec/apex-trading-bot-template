@@ -252,16 +252,25 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low, ris
 
     actual_entry = order_result["avg_price"]
 
-    # Calculate Take-Profit (2:1 Risk/Reward ratio)
+    # === SPLIT TAKE-PROFIT ===
+    # TP1: Halbe Position bei 1:1 R:R (sichert das Risiko ab)
+    # TP2: Andere Haelfte bei 3:1 R:R (der "Runner" fuer grosse Moves)
+    # Der Monitor uebernimmt danach ATR-Trailing fuer den Runner.
     risk_per_coin = abs(actual_entry - stop_loss)
-    reward_per_coin = risk_per_coin * 2  # Conservative 2:1
 
     if direction == "long":
-        take_profit = actual_entry + reward_per_coin
+        take_profit_1 = actual_entry + risk_per_coin * 1.0   # 1:1
+        take_profit_2 = actual_entry + risk_per_coin * 3.0   # 3:1
     else:
-        take_profit = actual_entry - reward_per_coin
+        take_profit_1 = actual_entry - risk_per_coin * 1.0   # 1:1
+        take_profit_2 = actual_entry - risk_per_coin * 3.0   # 3:1
 
-    # Place stop-loss
+    # Halbe Position pro TP
+    from place_order import round_size as _round_size
+    size_tp1 = _round_size(asset, size / 2)
+    size_tp2 = _round_size(asset, size - size_tp1)  # Rest (vermeidet Rundungsfehler)
+
+    # Place stop-loss (volle Position)
     sl_result = place_stop_loss(asset, stop_loss, size)
 
     # KRITISCH: Wenn SL fehlschlaegt, Position sofort schliessen!
@@ -309,8 +318,9 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low, ris
             "rollback": rollback
         }
 
-    # Place take-profit
-    tp_result = place_take_profit(asset, take_profit, size)
+    # Place Take-Profits (Split: 2 separate Orders)
+    tp1_result = place_take_profit(asset, take_profit_1, size_tp1)
+    tp2_result = place_take_profit(asset, take_profit_2, size_tp2)
 
     # Log trade
     log_trade({
@@ -319,13 +329,18 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low, ris
         "entry_price": actual_entry,
         "size": size,
         "stop_loss": stop_loss,
-        "take_profit": take_profit,
+        "take_profit_1": take_profit_1,
+        "take_profit_2": take_profit_2,
+        "size_tp1": size_tp1,
+        "size_tp2": size_tp2,
         "risk_usd": risk_usd,
-        "reward_usd": risk_usd * 2,
-        "ratio": "2:1",
+        "reward_usd_tp1": risk_usd * 1,
+        "reward_usd_tp2": risk_usd * 3,
+        "ratio": "Split 1:1 + 3:1",
         "order_result": order_result,
         "sl_result": sl_result,
-        "tp_result": tp_result
+        "tp1_result": tp1_result,
+        "tp2_result": tp2_result
     })
 
     return {
@@ -335,10 +350,14 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low, ris
         "entry": actual_entry,
         "size": size,
         "stop_loss": stop_loss,
-        "take_profit": take_profit,
+        "take_profit_1": take_profit_1,
+        "take_profit_2": take_profit_2,
+        "size_tp1": size_tp1,
+        "size_tp2": size_tp2,
         "risk_usd": risk_usd,
         "sl_placed": sl_result["success"],
-        "tp_placed": tp_result["success"]
+        "tp1_placed": tp1_result["success"],
+        "tp2_placed": tp2_result["success"]
     }
 
 
@@ -369,9 +388,10 @@ def calculate_atr(client, asset, interval="15m", periods=14):
         return None
 
 
-# Minimum Box-Groesse: Wenn die Opening Range kleiner als 1x ATR ist,
+# Minimum Box-Groesse: Wenn die Opening Range kleiner als 0.6x ATR ist,
 # ist sie zu eng und Breakouts sind wahrscheinlich Noise.
-MIN_BOX_ATR_RATIO = 1.0
+# (1.0 war zu konservativ -- filterte BTC Tokyo Sessions fast immer raus)
+MIN_BOX_ATR_RATIO = 0.6
 
 # Breakout-Threshold: Preis muss mindestens 0.5x ATR ueber/unter der Box sein
 BREAKOUT_ATR_MULTIPLIER = 0.5
@@ -420,7 +440,7 @@ def scan_for_breakouts():
         if atr and atr > 0:
             threshold = atr * BREAKOUT_ATR_MULTIPLIER
 
-            # Box zu eng? (kleiner als 1x ATR = wahrscheinlich Noise)
+            # Box zu eng? (kleiner als 0.6x ATR = wahrscheinlich Noise)
             if box_size < atr * MIN_BOX_ATR_RATIO:
                 print(f"   ⏭️  {asset}: Box zu eng (${box_size:,.2f} < ATR ${atr:,.2f}) -- Skip")
                 continue
@@ -561,10 +581,10 @@ def main():
         print(f"   Entry: ${result['entry']:,.2f}")
         print(f"   Size: {result['size']}")
         print(f"   Stop-Loss: ${result['stop_loss']:,.2f} (Risk: ${risk_usd:.0f})")
-        print(f"   Take-Profit: ${result['take_profit']:,.2f} (Reward: ${risk_usd * 2:.0f})")
-        print(f"   Ratio: 2:1")
-        print(f"   SL Placed: {result['sl_placed']} | TP Placed: {result['tp_placed']}")
-        print(f"\n💡 Position Monitor läuft automatisch alle 30 Min")
+        print(f"   TP1 (50%): ${result['take_profit_1']:,.2f} @ {result['size_tp1']} (1:1)")
+        print(f"   TP2 (50%): ${result['take_profit_2']:,.2f} @ {result['size_tp2']} (3:1 Runner)")
+        print(f"   SL: {result['sl_placed']} | TP1: {result['tp1_placed']} | TP2: {result['tp2_placed']}")
+        print(f"\n💡 Position Monitor + ATR-Trailing aktiv")
 
         direction_emoji = "🟢" if result["direction"] == "long" else "🔴"
         msg = (
@@ -572,10 +592,13 @@ def main():
             f"{direction_emoji} {result['asset']} {result['direction'].upper()}\n"
             f"Entry: ${result['entry']:,.2f}\n"
             f"Size: {result['size']}\n"
-            f"Stop-Loss: ${result['stop_loss']:,.2f} (Risk: ${risk_usd:.0f})\n"
-            f"Take-Profit: ${result['take_profit']:,.2f} (Reward: ${risk_usd * 2:.0f})\n"
-            f"Ratio: 2:1\n"
-            f"SL: {'✅' if result['sl_placed'] else '❌'} | TP: {'✅' if result['tp_placed'] else '❌'}"
+            f"Stop-Loss: ${result['stop_loss']:,.2f} (Risk: ${risk_usd:.0f})\n\n"
+            f"📊 Split Take-Profit:\n"
+            f"  TP1: ${result['take_profit_1']:,.2f} @ {result['size_tp1']} (1:1)\n"
+            f"  TP2: ${result['take_profit_2']:,.2f} @ {result['size_tp2']} (3:1 Runner)\n\n"
+            f"SL: {'✅' if result['sl_placed'] else '❌'} | "
+            f"TP1: {'✅' if result['tp1_placed'] else '❌'} | "
+            f"TP2: {'✅' if result['tp2_placed'] else '❌'}"
         )
         send_telegram_message(msg)
 
