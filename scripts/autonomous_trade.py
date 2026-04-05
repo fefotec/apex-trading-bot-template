@@ -240,8 +240,8 @@ def execute_breakout_trade(asset, direction, entry_price, box_high, box_low, ris
 
     max_position_value = entry_price * size
     balance = risk_usd / MAX_RISK_PCT  # Rueckrechnung aus Risk
-    if max_position_value > balance * 5:  # Max 5x Leverage effektiv
-        return {"success": False, "error": f"Position too large (${max_position_value:.0f} > 5x ${balance:.0f})"}
+    if max_position_value > balance * 25:  # Max 25x Leverage (Hyperliquid erlaubt bis 50x)
+        return {"success": False, "error": f"Position too large (${max_position_value:.0f} > 25x ${balance:.0f})"}
 
     # Place market order
     is_buy = (direction == "long")
@@ -397,6 +397,71 @@ MIN_BOX_ATR_RATIO = 0.6
 BREAKOUT_ATR_MULTIPLIER = 0.5
 
 
+DEFAULT_PRIORITY = ["BTC", "ETH", "SOL", "AVAX"]
+MIN_TRADES_FOR_RANKING = 3  # Mindestens 3 Trades bevor ein Coin umpriorisiert wird
+RANKING_LOOKBACK = 20  # Letzte 20 Trades pro Coin betrachten
+
+
+def get_dynamic_priority():
+    """
+    Sortiere Assets nach Performance der letzten Trades.
+    Coins mit besserer Win-Rate kommen zuerst.
+    Coins mit weniger als MIN_TRADES_FOR_RANKING Trades behalten ihren Default-Platz.
+    """
+    if not os.path.exists(TRADES_FILE):
+        print(f"   📊 Prioritaet: {' > '.join(DEFAULT_PRIORITY)} (Default, keine Trades)")
+        return DEFAULT_PRIORITY
+
+    try:
+        with open(TRADES_FILE, 'r') as f:
+            all_trades = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return DEFAULT_PRIORITY
+
+    # Nur geschlossene Trades mit Exit-Daten
+    closed = [t for t in all_trades if "exit_pnl" in t]
+
+    # Stats pro Coin berechnen (nur letzte RANKING_LOOKBACK Trades)
+    coin_stats = {}
+    for coin in DEFAULT_PRIORITY:
+        coin_trades = [t for t in closed if t.get("asset") == coin]
+        recent = coin_trades[-RANKING_LOOKBACK:]
+
+        if len(recent) < MIN_TRADES_FOR_RANKING:
+            coin_stats[coin] = {"win_rate": 0, "pnl": 0, "trades": len(recent), "ranked": False}
+        else:
+            wins = sum(1 for t in recent if t["exit_pnl"] > 0)
+            total_pnl = sum(t["exit_pnl"] for t in recent)
+            coin_stats[coin] = {
+                "win_rate": wins / len(recent) * 100,
+                "pnl": total_pnl,
+                "trades": len(recent),
+                "ranked": True,
+            }
+
+    # Sortieren: gerankte Coins nach Win-Rate (absteigend), dann nach P&L
+    # Ungerankte Coins behalten ihre Default-Position
+    ranked = [c for c in DEFAULT_PRIORITY if coin_stats[c]["ranked"]]
+    unranked = [c for c in DEFAULT_PRIORITY if not coin_stats[c]["ranked"]]
+
+    ranked.sort(key=lambda c: (coin_stats[c]["win_rate"], coin_stats[c]["pnl"]), reverse=True)
+
+    # Zusammenfuegen: gerankte zuerst, dann ungerankte in Default-Reihenfolge
+    priority = ranked + unranked
+
+    # Log
+    parts = []
+    for c in priority:
+        s = coin_stats[c]
+        if s["ranked"]:
+            parts.append(f"{c}({s['win_rate']:.0f}%/{s['trades']}T)")
+        else:
+            parts.append(f"{c}(neu)")
+    print(f"   📊 Prioritaet: {' > '.join(parts)}")
+
+    return priority
+
+
 def scan_for_breakouts():
     """
     Scanne alle Assets auf Breakouts.
@@ -417,8 +482,8 @@ def scan_for_breakouts():
     positions = client.get_positions()
     position_assets = [p.coin for p in positions]
 
-    # Priority: BTC > ETH > SOL > AVAX
-    priority = ["BTC", "ETH", "SOL", "AVAX"]
+    # Dynamische Prioritaet basierend auf den letzten 20 Trades pro Coin
+    priority = get_dynamic_priority()
 
     best_breakout = None
 
@@ -435,6 +500,12 @@ def scan_for_breakouts():
         current_price = client.get_price(asset)
         box_size = box["high"] - box["low"]
 
+        # Minimum Box-Groesse: mindestens 0.2% vom Preis (absolute Untergrenze)
+        min_box_pct = current_price * 0.002
+        if box_size < min_box_pct:
+            print(f"   ⏭️  {asset}: Box zu eng (${box_size:.4f} < 0.2% ${min_box_pct:.4f}) -- Skip")
+            continue
+
         # ATR-basierter Threshold
         atr = calculate_atr(client, asset)
         if atr and atr > 0:
@@ -442,10 +513,10 @@ def scan_for_breakouts():
 
             # Box zu eng? (kleiner als 0.6x ATR = wahrscheinlich Noise)
             if box_size < atr * MIN_BOX_ATR_RATIO:
-                print(f"   ⏭️  {asset}: Box zu eng (${box_size:,.2f} < ATR ${atr:,.2f}) -- Skip")
+                print(f"   ⏭️  {asset}: Box zu eng (${box_size:.4f} < ATR ${atr:.4f}) -- Skip")
                 continue
 
-            print(f"   📐 {asset}: ATR=${atr:,.2f}, Threshold=${threshold:,.2f}, Box=${box_size:,.2f}")
+            print(f"   📐 {asset}: ATR=${atr:.4f}, Threshold=${threshold:.4f}, Box=${box_size:.4f}")
         else:
             # Fallback wenn ATR nicht berechnet werden kann
             threshold = current_price * 0.005  # 0.5% als Minimum

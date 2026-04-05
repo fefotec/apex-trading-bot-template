@@ -250,6 +250,94 @@ def check_trailing_sl(client, positions, state):
         state[trail_key] = trail_state
 
 
+def check_orphan_position(client, pos, state):
+    """
+    Pruefen ob die aktuelle Position groesser ist als der letzte Trade erwartet.
+    Wenn ja, haengt eine alte Rest-Position ohne SL/TP mit drin.
+    In dem Fall: Warnung per Telegram + Rest-Position sofort schliessen.
+    """
+    coin = pos.coin
+    actual_size = abs(pos.size)
+
+    # Schon gewarnt fuer diese Position?
+    orphan_key = f"orphan_warned_{coin}"
+    if state.get(orphan_key):
+        return
+
+    # Letzten Trade fuer diesen Coin aus trades.json holen
+    if not os.path.exists(TRADES_FILE):
+        return
+
+    try:
+        with open(TRADES_FILE, 'r') as f:
+            trades = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return
+
+    # Letzten offenen Trade fuer diesen Coin finden (ohne exit)
+    last_trade = None
+    for t in reversed(trades):
+        if t.get("asset") == coin and "exit_price" not in t:
+            last_trade = t
+            break
+
+    if not last_trade:
+        return
+
+    expected_size = last_trade.get("size", 0)
+    if expected_size <= 0:
+        return
+
+    # Toleranz: 5% Abweichung ist OK (Teilfills, Rundung)
+    if actual_size > expected_size * 1.05:
+        orphan_size = actual_size - expected_size
+        is_long = pos.size > 0
+        direction = "LONG" if is_long else "SHORT"
+
+        print(f"\n⚠️  REST-POSITION ERKANNT!")
+        print(f"   {coin}: Erwartet {expected_size:.4f}, tatsaechlich {actual_size:.4f}")
+        print(f"   Ueberschuss: {orphan_size:.4f} (alte Position ohne SL/TP!)")
+
+        # Warnung per Telegram
+        msg = (
+            f"⚠️ APEX: Rest-Position erkannt!\n\n"
+            f"{coin} {direction}: {actual_size:.4f} statt erwartet {expected_size:.4f}\n"
+            f"Ueberschuss: {orphan_size:.4f}\n\n"
+            f"Eine alte Position ohne SL/TP haengt mit drin.\n"
+            f"Schliesse Rest-Position automatisch..."
+        )
+        send_telegram_notification(msg)
+
+        # Rest-Position sofort schliessen (reduce_only Market Order)
+        try:
+            from place_order import place_market_order, round_size
+            close_size = round_size(coin, orphan_size)
+            is_buy = not is_long  # Gegenrichtung zum Schliessen
+            result = place_market_order(coin, is_buy, close_size, reduce_only=True)
+
+            if result["success"]:
+                close_msg = (
+                    f"✅ Rest-Position geschlossen!\n\n"
+                    f"{coin}: {close_size} {direction} per Market geschlossen.\n"
+                    f"Preis: ${result.get('avg_price', 0):,.2f}"
+                )
+                print(f"   ✅ Rest geschlossen: {close_size} @ ${result.get('avg_price', 0):,.2f}")
+            else:
+                close_msg = (
+                    f"❌ Rest-Position konnte nicht geschlossen werden!\n\n"
+                    f"Fehler: {result.get('error')}\n"
+                    f"Bitte manuell schliessen!"
+                )
+                print(f"   ❌ Close fehlgeschlagen: {result.get('error')}")
+
+            send_telegram_notification(close_msg)
+        except Exception as e:
+            print(f"   ❌ Close Exception: {e}")
+            send_telegram_notification(f"❌ APEX: Rest-Position Close Fehler: {e}\nBitte manuell schliessen!")
+
+        state[orphan_key] = True
+
+
 def update_pnl_tracker(pnl):
     """Update P&L tracker with realized profit"""
     if not os.path.exists(PNL_TRACKER_FILE):
@@ -295,9 +383,9 @@ def main():
     last_count = state.get("last_position_count", 0)
     
     # Quick exit if no positions and wasn't tracking any
+    # NICHT returnen — Deposit-Erkennung muss trotzdem laufen!
     if current_count == 0 and last_count == 0:
         print("\n⏸️  Keine Positionen - Monitor idle")
-        return current_count
     
     # Check if position was closed
     if last_count > 0 and current_count == 0:
@@ -403,7 +491,48 @@ Size: {total_size:.5f}
         else:
             print("⚠️  Keine geschlossenen Trades in letzten 24h gefunden")
             send_telegram_notification("🎯 APEX: Position geschlossen, aber keine Trade-Details gefunden.")
-        
+
+        # === CLOSE VERIFICATION ===
+        # Nochmal pruefen ob die Position auf der Exchange WIRKLICH weg ist.
+        # Wenn nicht: Rest sofort schliessen + Alarm.
+        verify_positions = client.get_positions()
+        for vpos in verify_positions:
+            if vpos.coin in last_coins:
+                remaining = abs(vpos.size)
+                direction = "LONG" if vpos.size > 0 else "SHORT"
+                print(f"\n⚠️  CLOSE VERIFICATION FAILED: {vpos.coin} hat noch {remaining} offen!")
+
+                msg = (
+                    f"⚠️ APEX: Position nicht vollstaendig geschlossen!\n\n"
+                    f"{vpos.coin} {direction}: {remaining} noch offen\n"
+                    f"Schliesse Rest automatisch..."
+                )
+                send_telegram_notification(msg)
+
+                # Rest schliessen
+                try:
+                    from place_order import place_market_order, round_size
+                    close_size = round_size(vpos.coin, remaining)
+                    is_buy = vpos.size < 0  # Gegenrichtung
+                    result = place_market_order(vpos.coin, is_buy, close_size, reduce_only=True)
+
+                    if result["success"]:
+                        print(f"   ✅ Rest geschlossen: {close_size} @ ${result.get('avg_price', 0):,.2f}")
+                        send_telegram_notification(
+                            f"✅ Rest-Position {vpos.coin} geschlossen!\n"
+                            f"Size: {close_size} @ ${result.get('avg_price', 0):,.2f}"
+                        )
+                    else:
+                        print(f"   ❌ Close fehlgeschlagen: {result.get('error')}")
+                        send_telegram_notification(
+                            f"❌ {vpos.coin} Rest konnte nicht geschlossen werden!\n"
+                            f"Fehler: {result.get('error')}\n"
+                            f"Bitte manuell schliessen!"
+                        )
+                except Exception as e:
+                    print(f"   ❌ Close Exception: {e}")
+                    send_telegram_notification(f"❌ {vpos.coin} Close Fehler: {e}\nBitte manuell schliessen!")
+
     elif current_count > 0:
         # Position still running
         pos = positions[0]
@@ -413,6 +542,11 @@ Size: {total_size:.5f}
         print(f"\n✅ Position läuft weiter:")
         print(f"   {pos.coin} {('LONG' if is_long else 'SHORT')}")
         print(f"   P&L: ${pos.unrealized_pnl:.2f} ({pnl_pct:+.1f}%)")
+
+        # === REST-POSITIONS-CHECK ===
+        # Pruefen ob die aktuelle Position groesser ist als erwartet
+        # (= alte Rest-Position ohne SL/TP haengt mit drin)
+        check_orphan_position(client, pos, state)
 
         # SL-Trailing pruefen (ab +3% → SL auf +1%)
         check_trailing_sl(client, positions, state)
@@ -483,10 +617,10 @@ Size: {total_size:.5f}
     if last_count > 0 and current_count == 0:
         state["last_position_closed_at"] = datetime.now().isoformat()
 
-    # Trailing-State aufraeumen wenn Position geschlossen
+    # Trailing- und Orphan-State aufraeumen wenn Position geschlossen
     if current_count == 0:
         for key in list(state.keys()):
-            if key.startswith("trail_"):
+            if key.startswith("trail_") or key.startswith("orphan_"):
                 del state[key]
 
     save_state(state)
