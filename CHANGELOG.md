@@ -4,6 +4,24 @@ Alle wichtigen Aenderungen am APEX Trading Bot.
 
 ---
 
+## 2026-04-19
+
+### Documentation
+- **Public template refreshed:** README und PROJEKT spiegeln jetzt den aktuellen Architektur-Stand als bereinigten Doku-Snapshot wider.
+- **Public/private boundary clarified:** Das Template ist jetzt explizit als Dokumentations-Repo beschrieben, nicht als 1:1-Live-Mirror.
+
+### Architecture
+- **Aktiver ORB-Stand dokumentiert:** BTC, SOL und AVAX aktiv; ETH entfernt; Tokyo nur BTC.
+- **Execution path aktualisiert:** System-Cron + Python-Skripte dokumentiert statt OpenClaw-Scheduling.
+- **WeekendMomo ergaenzt:** Wochenend-Strategie als eigener Lifecycle im Oeffentlichkeitsstand beschrieben.
+
+### Hardening
+- **Fail-Closed Gates dokumentiert:** Regime-, Market-, Candle- und Spread-Checks blocken Trades bei Fehlern.
+- **Trade-Journal dokumentiert:** `trade_id`, `log_version` und `status` als Grundlage fuer sauberes Entry-/Exit-Matching erwaehnt.
+- **P&L-Rebuild dokumentiert:** Aggregierte Kennzahlen werden aus geschlossenen Trades rekonstruiert.
+- **Deposit-Review dokumentiert:** Balance-Spruenge werden als `suspected_deposits` zur manuellen Pruefung markiert.
+- **Order-Layer dokumentiert:** Wiederverwendete SDK-/Exchange-Initialisierung statt mehrfacher Re-Initialisierung.
+
 ## 2026-04-05
 
 ### Features
