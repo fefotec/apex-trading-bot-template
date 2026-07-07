@@ -21,3 +21,6 @@ __pycache__/
 config/.env*
 !config/.env*.example
 # Auto-pull test 18:45
+
+# Graphify (generierter Wissensgraph, abgeleitete Daten)
+graphify-out/
